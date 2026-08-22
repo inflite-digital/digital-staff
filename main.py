@@ -9,8 +9,8 @@ from telegram.ext import (
     filters
 )
 
-TELEGRAM_TOKEN = os.getenv("8918758371:AAGI59NhdznEGM3HW4CNByD51am4CpFq8uw")
-GEMINI_API_KEY = os.getenv("AQ.Ab8RN6KioZmp_shgRunNIxlEq6VLKiPsQ8qF2QRxwKXSIljPZg")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
