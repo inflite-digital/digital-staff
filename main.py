@@ -16,7 +16,7 @@ from telegram.ext import (
 
 
 # =========================================================
-# CONFIGURATION
+# SETTINGS
 # =========================================================
 
 logging.basicConfig(
@@ -24,162 +24,65 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-# Prevent Telegram token from appearing repeatedly in Railway logs
+# Prevent the Telegram token from appearing repeatedly in logs
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-# Railway persistent-volume path can be entered as DB_PATH.
-# Without a Railway volume, the default memory.db may disappear
-# after a redeployment.
-DB_PATH = os.getenv("DB_PATH", "memory.db")
-
 GROQ_MODEL = os.getenv(
     "GROQ_MODEL",
     "openai/gpt-oss-120b",
 )
+DB_PATH = os.getenv(
+    "DB_PATH",
+    "memory.db",
+)
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError(
-        "TELEGRAM_TOKEN is missing from Railway Variables"
+        "TELEGRAM_TOKEN is missing from Railway Variables."
     )
 
 if not GROQ_API_KEY:
     raise RuntimeError(
-        "GROQ_API_KEY is missing from Railway Variables"
+        "GROQ_API_KEY is missing from Railway Variables."
     )
 
-groq_client = Groq(api_key=GROQ_API_KEY)
+groq_client = Groq(
+    api_key=GROQ_API_KEY
+)
 
 
 # =========================================================
-# BOT IDENTITY
+# DIGITAL STAFF INSTRUCTIONS
 # =========================================================
 
-SYSTEM_INSTRUCTION = """
-You are Fadzlan's personal Digital Staff.
+SYSTEM_PROMPT = """
+You are a personal Digital Staff.
 
-Your role is to assist with:
-- Managing outstanding work and action items
-- Remembering work-related information
-- Drafting concise professional emails
-- Drafting natural WhatsApp messages
-- Summarizing operational updates
-- Organizing issues, follow-ups and project information
-- Retrieving relevant information from stored memories
+You help the user:
+- Remember work information
+- Review outstanding work
+- Organize action items
+- Draft professional emails
+- Draft natural WhatsApp messages
+- Summarize updates
+- Track unresolved matters
+- Retrieve useful details from stored memory
 
-Communication requirements:
+Rules:
 - Be concise, practical and professional.
-- Use clear headings and bullet points when useful.
-- Do not claim to access company systems, emails, files or calendars.
-- Only use information provided by the user or stored in memory.
-- Clearly state when required information is unavailable.
+- Use only the information supplied by the user or stored in memory.
+- Never invent names, dates, owners, deadlines or statuses.
+- Clearly state when information is unavailable.
+- Follow the selected command description carefully.
+- Treat the command description as the task instruction.
 """
 
 
 # =========================================================
-# COMMAND REGISTRY
-# =========================================================
-#
-# Add future commands here.
-#
-# Telegram does not automatically send BotFather command
-# descriptions to the Python program. The instructions must be
-# defined here so the bot knows what each command should do.
-#
-
-COMMANDS = {
-    "outstandingwork": {
-        "menu_description": "Show all outstanding work",
-        "instruction": """
-Review the stored memories and identify outstanding work,
-open actions, unresolved issues, pending follow-ups and deadlines.
-
-Organize the response under:
-1. Urgent or time-sensitive
-2. Open actions
-3. Awaiting response
-4. Items with unclear status
-
-Do not invent missing owners, dates, deadlines or statuses.
-If no outstanding work is stored, clearly say so.
-""",
-    },
-
-    "openissues": {
-        "menu_description": "Show open issues",
-        "instruction": """
-Review stored memories and list unresolved issues.
-
-For each issue, show only information that is available:
-- Issue
-- Current status
-- Required action
-- Owner
-- Due date
-
-Do not invent missing information.
-""",
-    },
-
-    "followups": {
-        "menu_description": "Show pending follow-ups",
-        "instruction": """
-Review stored memories and identify items requiring follow-up.
-
-Group the results by subject or project.
-State what needs to be followed up and with whom, but only
-when that information exists in memory.
-""",
-    },
-
-    "draftemail": {
-        "menu_description": "Draft a professional email",
-        "instruction": """
-Draft a concise and professional email based on the user's text
-after the command.
-
-Provide:
-- Subject
-- Email body
-
-Use a firm but respectful tone unless the user requests another tone.
-Do not add facts that were not supplied by the user or stored in memory.
-""",
-    },
-
-    "draftwhatsapp": {
-        "menu_description": "Draft a WhatsApp message",
-        "instruction": """
-Draft a concise, natural and professional WhatsApp message based
-on the user's text after the command.
-
-The message should sound human and direct, not overly formal.
-Do not add facts that were not provided.
-""",
-    },
-
-    "summary": {
-        "menu_description": "Summarize stored work",
-        "instruction": """
-Summarize the relevant stored memories into:
-- Key updates
-- Outstanding actions
-- Open issues
-- Completed items
-- Missing information
-
-Do not assume that an item is completed unless the stored memory
-explicitly says it is completed or closed.
-""",
-    },
-}
-
-
-# =========================================================
-# DATABASE
+# SQLITE DATABASE
 # =========================================================
 
 def get_connection():
@@ -189,7 +92,7 @@ def get_connection():
     )
 
 
-def init_db():
+def init_database():
     with get_connection() as connection:
         cursor = connection.cursor()
 
@@ -205,14 +108,36 @@ def init_db():
             """
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS custom_commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_user_id INTEGER NOT NULL,
+                command_name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (
+                    telegram_user_id,
+                    command_name
+                )
+            )
+            """
+        )
+
         connection.commit()
 
 
+# =========================================================
+# MEMORY DATABASE FUNCTIONS
+# =========================================================
+
 def save_memory(
-    telegram_user_id: int,
-    note: str,
+    telegram_user_id,
+    note,
 ):
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(
+        timezone.utc
+    ).isoformat()
 
     with get_connection() as connection:
         cursor = connection.cursor()
@@ -225,11 +150,12 @@ def save_memory(
                 status,
                 created_at
             )
-            VALUES (?, ?, 'open', ?)
+            VALUES (?, ?, ?, ?)
             """,
             (
                 telegram_user_id,
                 note,
+                "open",
                 created_at,
             ),
         )
@@ -241,8 +167,8 @@ def save_memory(
 
 
 def get_memories(
-    telegram_user_id: int,
-    limit: int = 100,
+    telegram_user_id,
+    limit=100,
 ):
     with get_connection() as connection:
         cursor = connection.cursor()
@@ -256,35 +182,6 @@ def get_memories(
                 created_at
             FROM memories
             WHERE telegram_user_id = ?
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (
-                telegram_user_id,
-                limit,
-            ),
-        )
-
-        return cursor.fetchall()
-
-
-def get_open_memories(
-    telegram_user_id: int,
-    limit: int = 100,
-):
-    with get_connection() as connection:
-        cursor = connection.cursor()
-
-        cursor.execute(
-            """
-            SELECT
-                id,
-                note,
-                status,
-                created_at
-            FROM memories
-            WHERE telegram_user_id = ?
-              AND status = 'open'
             ORDER BY id DESC
             LIMIT ?
             """,
@@ -298,8 +195,8 @@ def get_open_memories(
 
 
 def close_memory(
-    telegram_user_id: int,
-    memory_id: int,
+    telegram_user_id,
+    memory_id,
 ):
     with get_connection() as connection:
         cursor = connection.cursor()
@@ -308,12 +205,12 @@ def close_memory(
             """
             UPDATE memories
             SET status = 'closed'
-            WHERE id = ?
-              AND telegram_user_id = ?
+            WHERE telegram_user_id = ?
+              AND id = ?
             """,
             (
-                memory_id,
                 telegram_user_id,
+                memory_id,
             ),
         )
 
@@ -324,8 +221,8 @@ def close_memory(
 
 
 def delete_memory(
-    telegram_user_id: int,
-    memory_id: int,
+    telegram_user_id,
+    memory_id,
 ):
     with get_connection() as connection:
         cursor = connection.cursor()
@@ -333,12 +230,12 @@ def delete_memory(
         cursor.execute(
             """
             DELETE FROM memories
-            WHERE id = ?
-              AND telegram_user_id = ?
+            WHERE telegram_user_id = ?
+              AND id = ?
             """,
             (
-                memory_id,
                 telegram_user_id,
+                memory_id,
             ),
         )
 
@@ -348,53 +245,182 @@ def delete_memory(
     return changed > 0
 
 
-def build_memory_text(memories):
+def format_memories_for_ai(memories):
     if not memories:
-        return "No stored memories are available."
+        return "No memories have been saved."
 
-    lines = []
+    formatted_items = []
 
-    for memory_id, note, status, created_at in memories:
-        lines.append(
+    for memory in memories:
+        memory_id = memory[0]
+        note = memory[1]
+        status = memory[2]
+        created_at = memory[3]
+
+        formatted_items.append(
             f"Memory ID: {memory_id}\n"
             f"Status: {status}\n"
-            f"Note: {note}\n"
-            f"Saved at: {created_at}"
+            f"Details: {note}\n"
+            f"Saved: {created_at}"
         )
 
-    return "\n\n".join(lines)
+    return "\n\n".join(
+        formatted_items
+    )
 
 
 # =========================================================
-# GROQ AI
+# CUSTOM COMMAND DATABASE FUNCTIONS
 # =========================================================
 
-def request_groq(
-    user_message: str,
-    memory_text: str,
-    command_instruction: str = "",
+def save_custom_command(
+    telegram_user_id,
+    command_name,
+    description,
 ):
-    command_section = ""
+    created_at = datetime.now(
+        timezone.utc
+    ).isoformat()
 
-    if command_instruction:
-        command_section = f"""
-The user selected a Telegram command.
+    with get_connection() as connection:
+        cursor = connection.cursor()
 
-Command instructions:
-{command_instruction}
-"""
+        cursor.execute(
+            """
+            INSERT INTO custom_commands (
+                telegram_user_id,
+                command_name,
+                description,
+                created_at
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(
+                telegram_user_id,
+                command_name
+            )
+            DO UPDATE SET
+                description = excluded.description,
+                created_at = excluded.created_at
+            """,
+            (
+                telegram_user_id,
+                command_name,
+                description,
+                created_at,
+            ),
+        )
 
-    response = groq_client.chat.completions.create(
+        connection.commit()
+
+
+def get_custom_command(
+    telegram_user_id,
+    command_name,
+):
+    with get_connection() as connection:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT description
+            FROM custom_commands
+            WHERE telegram_user_id = ?
+              AND command_name = ?
+            """,
+            (
+                telegram_user_id,
+                command_name,
+            ),
+        )
+
+        result = cursor.fetchone()
+
+    if result:
+        return result[0]
+
+    return None
+
+
+def get_custom_commands(
+    telegram_user_id,
+):
+    with get_connection() as connection:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT
+                command_name,
+                description
+            FROM custom_commands
+            WHERE telegram_user_id = ?
+            ORDER BY command_name ASC
+            """,
+            (
+                telegram_user_id,
+            ),
+        )
+
+        return cursor.fetchall()
+
+
+def delete_custom_command(
+    telegram_user_id,
+    command_name,
+):
+    with get_connection() as connection:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            DELETE FROM custom_commands
+            WHERE telegram_user_id = ?
+              AND command_name = ?
+            """,
+            (
+                telegram_user_id,
+                command_name,
+            ),
+        )
+
+        changed = cursor.rowcount
+        connection.commit()
+
+    return changed > 0
+
+
+# =========================================================
+# GROQ
+# =========================================================
+
+def ask_groq(
+    user_message,
+    stored_memory,
+    command_description=None,
+):
+    command_prompt = ""
+
+    if command_description:
+        command_prompt = (
+            "\n\nThe user selected a custom command.\n"
+            "Use the following command description as the "
+            "main task instruction:\n\n"
+            f"{command_description}"
+        )
+
+    complete_system_prompt = (
+        SYSTEM_PROMPT
+        + command_prompt
+        + "\n\nStored work memory:\n\n"
+        + stored_memory
+    )
+
+    completion = groq_client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[
             {
                 "role": "system",
-                "content": (
-                    SYSTEM_INSTRUCTION
-                    + command_section
-                    + "\n\nStored memories:\n"
-                    + memory_text
-                ),
+                "content": complete_system_prompt,
             },
             {
                 "role": "user",
@@ -405,116 +431,147 @@ Command instructions:
         max_completion_tokens=2048,
     )
 
-    return response.choices[0].message.content
+    return completion.choices[0].message.content
 
+
+# =========================================================
+# TELEGRAM HELPER
+# =========================================================
 
 async def send_long_message(
-    update: Update,
-    text: str,
+    update,
+    message,
 ):
-    if not text:
-        text = "No response was generated."
+    if not message:
+        message = "No response was generated."
 
-    for start_index in range(0, len(text), 4000):
+    for starting_position in range(
+        0,
+        len(message),
+        4000,
+    ):
         await update.effective_message.reply_text(
-            text[start_index:start_index + 4000]
+            message[
+                starting_position:
+                starting_position + 4000
+            ]
+        )
+
+
+async def refresh_command_menu(
+    application,
+    telegram_user_id,
+):
+    custom_commands = get_custom_commands(
+        telegram_user_id
+    )
+
+    command_menu = [
+        BotCommand(
+            "start",
+            "Start Digital Staff",
+        ),
+        BotCommand(
+            "remember",
+            "Save work information",
+        ),
+        BotCommand(
+            "memories",
+            "View saved work information",
+        ),
+        BotCommand(
+            "addcommand",
+            "Create or update a command",
+        ),
+        BotCommand(
+            "commands",
+            "View custom commands",
+        ),
+        BotCommand(
+            "deletecommand",
+            "Delete a custom command",
+        ),
+        BotCommand(
+            "close",
+            "Close a saved memory",
+        ),
+        BotCommand(
+            "delete",
+            "Delete a saved memory",
+        ),
+    ]
+
+    reserved_commands = {
+        "start",
+        "remember",
+        "memories",
+        "addcommand",
+        "commands",
+        "deletecommand",
+        "close",
+        "delete",
+    }
+
+    for command_name, description in custom_commands:
+        if command_name in reserved_commands:
+            continue
+
+        short_description = description.replace(
+            "\n",
+            " ",
+        ).strip()
+
+        if len(short_description) > 200:
+            short_description = (
+                short_description[:197] + "..."
+            )
+
+        command_menu.append(
+            BotCommand(
+                command_name,
+                short_description,
+            )
+        )
+
+    try:
+        await application.bot.set_my_commands(
+            command_menu
+        )
+    except Exception:
+        logging.exception(
+            "Unable to refresh Telegram command menu"
         )
 
 
 # =========================================================
-# TELEGRAM COMMANDS
+# BASIC COMMANDS
 # =========================================================
 
-async def start(
+async def start_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    message = """
-Digital Staff is online.
+    telegram_user_id = update.effective_user.id
 
-Use these commands:
-
-/remember <details>
-Save work information.
-
-/memories
-Show stored memories.
-
-/outstandingwork
-Review open and outstanding work.
-
-/openissues
-Review unresolved issues.
-
-/followups
-Review pending follow-ups.
-
-/close <memory ID>
-Mark a memory as closed.
-
-/delete <memory ID>
-Delete a memory.
-
-/draftemail <details>
-Draft a professional email.
-
-/draftwhatsapp <details>
-Draft a WhatsApp message.
-
-/summary
-Summarize stored work.
-
-/help
-Show command guidance.
-
-You can also send normal messages without a command.
-"""
-
-    await update.effective_message.reply_text(
-        message.strip()
+    await refresh_command_menu(
+        context.application,
+        telegram_user_id,
     )
 
-
-async def help_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    lines = [
-        "Available commands:",
-        "",
-        "/remember <details>",
-        "Save information into memory.",
-        "",
-        "/memories",
-        "Show all saved memories and their IDs.",
-        "",
-        "/outstandingwork",
-        "Review outstanding work from stored memory.",
-        "",
-        "/openissues",
-        "Review unresolved issues.",
-        "",
-        "/followups",
-        "Review pending follow-ups.",
-        "",
-        "/close <memory ID>",
-        "Mark a saved item as closed.",
-        "",
-        "/delete <memory ID>",
-        "Permanently delete a saved item.",
-        "",
-        "/draftemail <details>",
-        "Draft a professional email.",
-        "",
-        "/draftwhatsapp <details>",
-        "Draft a WhatsApp message.",
-        "",
-        "/summary",
-        "Summarize saved work information.",
-    ]
+    message = (
+        "Digital Staff is online.\n\n"
+        "Create a custom command like this:\n\n"
+        "/addcommand outstandingwork | "
+        "Review my stored memories and show all open "
+        "work, pending actions and unresolved issues.\n\n"
+        "Then use:\n\n"
+        "/outstandingwork\n\n"
+        "The command description will be used as the "
+        "AI instruction."
+    )
 
     await update.effective_message.reply_text(
-        "\n".join(lines)
+        message
     )
 
 
@@ -523,11 +580,13 @@ async def remember_command(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     telegram_user_id = update.effective_user.id
-    note = " ".join(context.args).strip()
+    note = " ".join(
+        context.args
+    ).strip()
 
     if not note:
         await update.effective_message.reply_text(
-            "Please include the details after the command.\n\n"
+            "Add the memory after the command.\n\n"
             "Example:\n"
             "/remember Follow up with vendor regarding RCA"
         )
@@ -539,7 +598,7 @@ async def remember_command(
     )
 
     await update.effective_message.reply_text(
-        f"Memory saved with ID {memory_id}."
+        f"Memory saved. ID: {memory_id}"
     )
 
 
@@ -548,7 +607,10 @@ async def memories_command(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     telegram_user_id = update.effective_user.id
-    memories = get_memories(telegram_user_id)
+
+    memories = get_memories(
+        telegram_user_id
+    )
 
     if not memories:
         await update.effective_message.reply_text(
@@ -556,16 +618,24 @@ async def memories_command(
         )
         return
 
-    lines = ["Stored memories:", ""]
+    output_lines = [
+        "Stored memories:",
+        "",
+    ]
 
-    for memory_id, note, status, created_at in memories:
-        lines.append(
-            f"ID {memory_id} | {status.upper()}\n{note}\n"
+    for memory in memories:
+        memory_id = memory[0]
+        note = memory[1]
+        status = memory[2]
+
+        output_lines.append(
+            f"ID {memory_id} | {status.upper()}\n"
+            f"{note}\n"
         )
 
     await send_long_message(
         update,
-        "\n".join(lines),
+        "\n".join(output_lines),
     )
 
 
@@ -577,26 +647,28 @@ async def close_command(
 
     if not context.args:
         await update.effective_message.reply_text(
-            "Please provide the memory ID.\n\n"
+            "Provide the memory ID.\n\n"
             "Example:\n"
             "/close 3"
         )
         return
 
     try:
-        memory_id = int(context.args[0])
+        memory_id = int(
+            context.args[0]
+        )
     except ValueError:
         await update.effective_message.reply_text(
             "The memory ID must be a number."
         )
         return
 
-    was_closed = close_memory(
+    success = close_memory(
         telegram_user_id,
         memory_id,
     )
 
-    if was_closed:
+    if success:
         await update.effective_message.reply_text(
             f"Memory ID {memory_id} marked as closed."
         )
@@ -604,6 +676,176 @@ async def close_command(
         await update.effective_message.reply_text(
             f"Memory ID {memory_id} was not found."
         )
+
+
+async def delete_memory_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    telegram_user_id = update.effective_user.id
+
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Provide the memory ID.\n\n"
+            "Example:\n"
+            "/delete 3"
+        )
+        return
+
+    try:
+        memory_id = int(
+            context.args[0]
+        )
+    except ValueError:
+        await update.effective_message.reply_text(
+            "The memory ID must be a number."
+        )
+        return
+
+    success = delete_memory(
+        telegram_user_id,
+        memory_id,
+    )
+
+    if success:
+        await update.effective_message.reply_text(
+            f"Memory ID {memory_id} deleted."
+        )
+    else:
+        await update.effective_message.reply_text(
+            f"Memory ID {memory_id} was not found."
+        )
+
+
+# =========================================================
+# CUSTOM COMMAND MANAGEMENT
+# =========================================================
+
+async def add_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    telegram_user_id = update.effective_user.id
+
+    full_text = (
+        update.effective_message.text or ""
+    )
+
+    command_content = full_text.replace(
+        "/addcommand",
+        "",
+        1,
+    ).strip()
+
+    if "|" not in command_content:
+        await update.effective_message.reply_text(
+            "Use this format:\n\n"
+            "/addcommand commandname | command description\n\n"
+            "Example:\n"
+            "/addcommand outstandingwork | "
+            "Review stored memories and show all open work, "
+            "pending actions and unresolved issues."
+        )
+        return
+
+    command_name, description = command_content.split(
+        "|",
+        1,
+    )
+
+    command_name = command_name.strip().lower()
+    description = description.strip()
+
+    command_name = command_name.lstrip("/")
+
+    if not command_name:
+        await update.effective_message.reply_text(
+            "The command name is missing."
+        )
+        return
+
+    if not description:
+        await update.effective_message.reply_text(
+            "The command description is missing."
+        )
+        return
+
+    if not command_name.replace(
+        "_",
+        "",
+    ).isalnum():
+        await update.effective_message.reply_text(
+            "Use only letters, numbers or underscores "
+            "in the command name."
+        )
+        return
+
+    reserved_commands = {
+        "start",
+        "remember",
+        "memories",
+        "addcommand",
+        "commands",
+        "deletecommand",
+        "close",
+        "delete",
+    }
+
+    if command_name in reserved_commands:
+        await update.effective_message.reply_text(
+            "That command name is reserved. "
+            "Please choose another name."
+        )
+        return
+
+    save_custom_command(
+        telegram_user_id,
+        command_name,
+        description,
+    )
+
+    await refresh_command_menu(
+        context.application,
+        telegram_user_id,
+    )
+
+    await update.effective_message.reply_text(
+        f"/{command_name} has been saved.\n\n"
+        f"Instruction:\n{description}"
+    )
+
+
+async def list_commands(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    telegram_user_id = update.effective_user.id
+
+    commands = get_custom_commands(
+        telegram_user_id
+    )
+
+    if not commands:
+        await update.effective_message.reply_text(
+            "No custom commands have been created."
+        )
+        return
+
+    output_lines = [
+        "Custom commands:",
+        "",
+    ]
+
+    for command_name, description in commands:
+        output_lines.append(
+            f"/{command_name}\n"
+            f"{description}\n"
+        )
+
+    await send_long_message(
+        update,
+        "\n".join(output_lines),
+    )
 
 
 async def delete_command(
@@ -614,279 +856,36 @@ async def delete_command(
 
     if not context.args:
         await update.effective_message.reply_text(
-            "Please provide the memory ID.\n\n"
+            "Provide the command name.\n\n"
             "Example:\n"
-            "/delete 3"
+            "/deletecommand outstandingwork"
         )
         return
 
-    try:
-        memory_id = int(context.args[0])
-    except ValueError:
-        await update.effective_message.reply_text(
-            "The memory ID must be a number."
-        )
-        return
-
-    was_deleted = delete_memory(
-        telegram_user_id,
-        memory_id,
+    command_name = (
+        context.args[0]
+        .strip()
+        .lower()
+        .lstrip("/")
     )
 
-    if was_deleted:
+    success = delete_custom_command(
+        telegram_user_id,
+        command_name,
+    )
+
+    if success:
+        await refresh_command_menu(
+            context.application,
+            telegram_user_id,
+        )
+
         await update.effective_message.reply_text(
-            f"Memory ID {memory_id} deleted."
+            f"/{command_name} deleted."
         )
     else:
         await update.effective_message.reply_text(
-            f"Memory ID {memory_id} was not found."
+            f"/{command_name} was not found."
         )
 
 
-async def dynamic_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    telegram_user_id = update.effective_user.id
-
-    raw_text = update.effective_message.text or ""
-    command_name = raw_text.split()[0]
-    command_name = command_name.split("@")[0]
-    command_name = command_name.lstrip("/").lower()
-
-    command_data = COMMANDS.get(command_name)
-
-    if not command_data:
-        await update.effective_message.reply_text(
-            "Unknown command. Use /help to view available commands."
-        )
-        return
-
-    command_arguments = " ".join(context.args).strip()
-
-    memories = get_memories(
-        telegram_user_id,
-        limit=100,
-    )
-
-    memory_text = build_memory_text(memories)
-
-    if command_arguments:
-        user_request = (
-            f"Execute /{command_name} using these additional details:\n"
-            f"{command_arguments}"
-        )
-    else:
-        user_request = (
-            f"Execute the /{command_name} command using the "
-            f"stored memories."
-        )
-
-    await update.effective_message.chat.send_action(
-        "typing"
-    )
-
-    try:
-        answer = await asyncio.to_thread(
-            request_groq,
-            user_request,
-            memory_text,
-            command_data["instruction"],
-        )
-
-        await send_long_message(
-            update,
-            answer,
-        )
-
-    except Exception as error:
-        logging.exception(
-            "Groq command request failed"
-        )
-
-        await update.effective_message.reply_text(
-            f"AI request failed:\n{str(error)}"
-        )
-
-
-# =========================================================
-# NORMAL CHAT
-# =========================================================
-
-async def normal_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    if not update.effective_message:
-        return
-
-    question = (
-        update.effective_message.text or ""
-    ).strip()
-
-    if not question:
-        return
-
-    telegram_user_id = update.effective_user.id
-
-    memories = get_memories(
-        telegram_user_id,
-        limit=100,
-    )
-
-    memory_text = build_memory_text(memories)
-
-    await update.effective_message.chat.send_action(
-        "typing"
-    )
-
-    try:
-        answer = await asyncio.to_thread(
-            request_groq,
-            question,
-            memory_text,
-        )
-
-        await send_long_message(
-            update,
-            answer,
-        )
-
-    except Exception as error:
-        logging.exception(
-            "Groq chat request failed"
-        )
-
-        await update.effective_message.reply_text(
-            f"AI request failed:\n{str(error)}"
-        )
-
-
-# =========================================================
-# TELEGRAM COMMAND MENU
-# =========================================================
-
-async def configure_bot_commands(application):
-    bot_commands = [
-        BotCommand(
-            "start",
-            "Start Digital Staff",
-        ),
-        BotCommand(
-            "remember",
-            "Save work information",
-        ),
-        BotCommand(
-            "memories",
-            "Show stored memories",
-        ),
-        BotCommand(
-            "close",
-            "Mark a memory as closed",
-        ),
-        BotCommand(
-            "delete",
-            "Delete a stored memory",
-        ),
-        BotCommand(
-            "help",
-            "Show available commands",
-        ),
-    ]
-
-    for command_name, command_data in COMMANDS.items():
-        bot_commands.append(
-            BotCommand(
-                command_name,
-                command_data["menu_description"],
-            )
-        )
-
-    await application.bot.set_my_commands(
-        bot_commands
-    )
-
-
-async def post_init(application):
-    await configure_bot_commands(application)
-    logging.info(
-        "Telegram command menu configured"
-    )
-
-
-# =========================================================
-# MAIN
-# =========================================================
-
-def main():
-    init_db()
-
-    application = (
-        ApplicationBuilder()
-        .token(TELEGRAM_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
-
-    # Fixed commands
-    application.add_handler(
-        CommandHandler(
-            "start",
-            start,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "help",
-            help_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "remember",
-            remember_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "memories",
-            memories_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "close",
-            close_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "delete",
-            delete_command,
-        )
-    )
-
-    # AI-powered commands from the command registry
-    for command_name in COMMANDS:
-        application.add_handler(
-            CommandHandler(
-                command_name,
-                dynamic_command,
-            )
-        )
-
-    # Catch unknown Telegram commands
-    application.add_handler(
-        MessageHandler(
-            filters.COMMAND,
-            dynamic_command,
-        )
-    )
-
-    # Normal text chat
-    application.add_handler(
