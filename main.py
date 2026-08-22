@@ -1,16 +1,22 @@
 import os
+import sqlite3
 import asyncio
 import logging
 
-from google import genai
+from openai import OpenAI
+
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    CommandHandler,
     MessageHandler,
+    CommandHandler,
     ContextTypes,
     filters,
 )
+
+# ----------------------------------
+# CONFIG
+# ----------------------------------
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -18,80 +24,223 @@ logging.basicConfig(
 )
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN is missing")
 
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is missing")
+if not GROQ_API_KEY:
+    raise RuntimeError("GROQ_API_KEY is missing")
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1"
+)
 
-SYSTEM_INSTRUCTION = """
-You are Fadzlan Digital Staff.
+# ----------------------------------
+# DATABASE
+# ----------------------------------
 
-You work for M Fadzlan,
-Executive (Shift Superintendent),
-KLIA Aviation Fuel Terminal.
+def init_db():
 
-Responsibilities:
-- Draft professional emails
-- Draft WhatsApp messages
-- Manage action items
-- Assist with daily operational reporting
-- Track EBITS issues
-- Support audit documentation
-- Support project discussions
+    conn = sqlite3.connect("memory.db")
 
-Always be concise, practical and professional.
-"""
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            note TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def save_memory(note):
+
+    conn = sqlite3.connect("memory.db")
+
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "INSERT INTO memories (note) VALUES (?)",
+        (note,)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def get_memories():
+
+    conn = sqlite3.connect("memory.db")
+
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT note FROM memories ORDER BY id DESC"
+    )
+
+    data = cursor.fetchall()
+
+    conn.close()
+
+    return data
+
+
+# ----------------------------------
+# BOT COMMANDS
+# ----------------------------------
 
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
     await update.message.reply_text(
-        "✅ KAFS Digital Staff is online."
+        "✅ Digital Staff is online."
     )
+
+
+# ----------------------------------
+# MESSAGE HANDLER
+# ----------------------------------
 
 async def reply(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
+    question = update.message.text.strip()
+
     try:
 
-        question = update.message.text
+        # --------------------------
+        # REMEMBER COMMAND
+        # --------------------------
+
+        if question.lower().startswith("remember"):
+
+            note = question[8:].strip()
+
+            if not note:
+
+                await update.message.reply_text(
+                    "Usage:\nRemember follow up vendor next week"
+                )
+
+                return
+
+            save_memory(note)
+
+            await update.message.reply_text(
+                "✅ Memory saved."
+            )
+
+            return
+
+        # --------------------------
+        # MEMORIES COMMAND
+        # --------------------------
+
+        if question.lower() == "memories":
+
+            memories = get_memories()
+
+            if not memories:
+
+                await update.message.reply_text(
+                    "No memories found."
+                )
+
+                return
+
+            result = "📌 Stored Memories\n\n"
+
+            for idx, row in enumerate(memories, start=1):
+
+                result += f"{idx}. {row[0]}\n"
+
+            await update.message.reply_text(result)
+
+            return
+
+        # --------------------------
+        # LOAD MEMORIES FOR AI
+        # --------------------------
+
+        memories = get_memories()
+
+        memory_text = "\n".join(
+            [m[0] for m in memories[:20]]
+        )
 
         await update.message.chat.send_action(
             "typing"
         )
 
         response = await asyncio.to_thread(
-            client.models.generate_content,
-            model="gemini-3.6-flash",
-            contents=question,
+            client.chat.completions.create,
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"""
+You are a personal Digital Staff for Fadzlan.
+
+Responsibilities:
+- Draft emails
+- Draft WhatsApp messages
+- Track actions
+- Assist with operational discussions
+- Keep responses concise
+
+Known memories:
+
+{memory_text}
+"""
+                },
+                {
+                    "role": "user",
+                    "content": question
+                }
+            ]
         )
 
-        answer = response.text
+        answer = (
+            response
+            .choices[0]
+            .message
+            .content
+        )
 
         if not answer:
             answer = "No response generated."
 
         for i in range(0, len(answer), 4000):
+
             await update.message.reply_text(
-                answer[i:i+4000]
+                answer[i:i + 4000]
             )
 
     except Exception as e:
 
-        logging.exception("Gemini request failed")
+        logging.exception("Error")
 
         await update.message.reply_text(
-            f"Error: {str(e)}"
+            f"Error:\n{str(e)}"
         )
 
+
+# ----------------------------------
+# MAIN
+# ----------------------------------
+
 def main():
+
+    init_db()
 
     app = (
         ApplicationBuilder()
@@ -118,6 +267,7 @@ def main():
     )
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
