@@ -40,7 +40,12 @@ client = OpenAI(
 # ----------------------------------
 # DATABASE
 # ----------------------------------
-
+application.add_handler(
+    CommandHandler(
+        "myid",
+        myid
+    )
+)
 def init_db():
 
     conn = sqlite3.connect("memory.db")
@@ -257,7 +262,14 @@ Stored reminders:
             f"Error:\n{str(e)}"
         )
 
+async def myid(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
+    await update.message.reply_text(
+        str(update.effective_chat.id)
+    )
 # ----------------------------------
 # MAIN
 # ----------------------------------
