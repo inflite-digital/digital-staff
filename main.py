@@ -86,6 +86,7 @@ def save_memory(note):
 
 
 def get_memories():
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -94,9 +95,27 @@ def get_memories():
     )
 
     data = cursor.fetchall()
+
     conn.close()
+
     return data
 
+def delete_memory(memory_id):
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM memories WHERE id = ?",
+        (memory_id,)
+    )
+
+    deleted = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    return deleted > 0
 # ----------------------------------
 # MORNING BRIEFING
 # ----------------------------------
@@ -278,6 +297,48 @@ Stored memories:
 # ----------------------------------
 # MAIN
 # ----------------------------------
+async def delete_item(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not context.args:
+
+        await update.effective_message.reply_text(
+            "Please provide the item ID.\n\n"
+            "Example:\n"
+            "/deleteitem 3"
+        )
+
+        return
+
+    try:
+
+        memory_id = int(context.args[0])
+
+    except ValueError:
+
+        await update.effective_message.reply_text(
+            "The item ID must be a number.\n\n"
+            "Example:\n"
+            "/deleteitem 3"
+        )
+
+        return
+
+    deleted = delete_memory(memory_id)
+
+    if deleted:
+
+        await update.effective_message.reply_text(
+            f"Item {memory_id} removed."
+        )
+
+    else:
+
+        await update.effective_message.reply_text(
+            f"Item {memory_id} was not found."
+        )
 
 def main():
     init_db()
@@ -291,6 +352,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("testbriefing", test_briefing))
+    app.add_handler(CommandHandler("deleteitem", delete_item))
 
     app.add_handler(
         MessageHandler(
@@ -306,6 +368,12 @@ def main():
             "in requirements.txt"
         )
 
+    app.add_handler(
+    CommandHandler(
+        "deleteitem",
+        delete_item
+        )
+    )
     app.job_queue.run_daily(
         send_morning_briefing,
         time=time(
