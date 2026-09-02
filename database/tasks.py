@@ -32,3 +32,23 @@ def create_task(
 
     conn.commit()
     conn.close()
+def list_open_tasks():
+
+    conn = sqlite3.connect(DB_PATH)
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            title,
+            due_date
+        FROM tasks
+        WHERE status='OPEN'
+    """)
+
+    data = cursor.fetchall()
+
+    conn.close()
+
+    return data
