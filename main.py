@@ -307,3 +307,37 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+async def send_morning_briefing(
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    CHAT_ID = 123456789
+
+    tasks = open_reminders()
+
+    message = (
+        "Good Morning Fadzlan\n\n"
+    )
+
+    message += (
+        f"Outstanding Tasks ({len(tasks)})\n"
+    )
+
+    for idx, task in enumerate(
+        tasks,
+        start=1
+    ):
+
+        message += (
+            f"{idx}. {task['task']}\n"
+        )
+
+    message += (
+        "\nHave a productive shift."
+    )
+
+    await context.bot.send_message(
+        chat_id=CHAT_ID,
+        text=message
+    )
